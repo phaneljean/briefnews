@@ -1,60 +1,69 @@
 """
-24/7 Railway Worker
-Triggers ingest.py every day at 4:30 AM PST (12:30 PM UTC)
+24/7 Railway background worker
+Triggers ingestion at 4:30 AM PST (12:30 PM UTC) daily
 """
-import schedule
-import time
 import os
-import sys
-import pytz
+import time
+import schedule
 from datetime import datetime
+import pytz
+
 from ingest import fetch_rss, dedupe, filter_with_gemini, draft_to_beehiiv
 
-def run_ingestion():
-    print(f"[{datetime.now(pytz.UTC)}] Starting ingestion run...")
+PST = pytz.timezone("America/Los_Angeles")
+
+def job():
+    now_pst = datetime.now(PST).strftime("%Y-%m-%d %H:%M:%S %Z")
+    print(f"[{now_pst}] Running daily ingestion...")
     try:
         items = dedupe(fetch_rss())
         print(f"Fetched {len(items)} items")
         
-        if len(items) == 0:
-            print("No items fetched. Skipping.")
-            return
-        
         briefing = filter_with_gemini(items)
         print(f"Generated briefing ({len(briefing)} chars)")
         
-        # Save locally for inspection
-        os.makedirs("/app/data", exist_ok=True)
-        with open("/app/data/latest_briefing.md", "w") as f:
+        # Save locally
+        os.makedirs("./data", exist_ok=True)
+        with open("./data/latest_briefing.md", "w") as f:
             f.write(briefing)
-        print("Saved to /app/data/latest_briefing.md")
+        print("Saved to ./data/latest_briefing.md")
         
-        # Draft to Beehiiv
-        if os.environ.get("PUBLISH_TO_BEEHIIV", "0") == "1":
-            result = draft_to_beehiiv(briefing)
-            print(f"Draft created on Beehiiv: {result.get('id')}")
+        # Push draft to Beehiiv if keys present
+        if os.getenv("BEEHIIV_API_KEY") and os.getenv("PUBLISH_TO_BEEHIIV") == "1":
+            res = draft_to_beehiiv(briefing)
+            print(f"Draft created: {res.get('id')}")
         else:
-            print("(Beehiiv publish disabled — set PUBLISH_TO_BEEHIIV=1 to enable)")
-        
+            print("Beehiiv publish disabled (set PUBLISH_TO_BEEHIIV=1 to enable)")
     except Exception as e:
-        print(f"ERROR: {e}", file=sys.stderr)
+        print(f"ERROR: {e}")
         import traceback
         traceback.print_exc()
 
 def schedule_job():
     # Schedule at 4:30 AM PST = 12:30 PM UTC
-    schedule.every().day.at("12:30").do(run_ingestion)
-    print("Scheduled ingestion at 12:30 UTC (4:30 AM PST)")
-    
-    # Run once at startup if RUN_ON_START=1
-    if os.environ.get("RUN_ON_START", "0") == "1":
-        print("RUN_ON_START detected — running now...")
-        run_ingestion()
+    # schedule library uses system time, so we use UTC
+    schedule.every().day.at("12:30").do(job)
+    print("Worker scheduled for 12:30 UTC (4:30 AM PST)")
 
 if __name__ == "__main__":
     schedule_job()
+    
+    # Run once on deploy for testing if RUN_ON_START=1
+    if os.getenv("RUN_ON_START") == "1":
+        print("RUN_ON_START=1 detected — running now for test...")
+        job()
+    
     print("Worker started. Listening for scheduled jobs...")
+    
+    last_run_date = None
     while True:
         schedule.run_pending()
-        time.sleep(60)
+        
+        # Log current time every hour
+        now = datetime.now(PST)
+        if last_run_date != now.date():
+            print(f"[{now.strftime('%Y-%m-%d %H:%M:%S %Z')}] Waiting for next run...")
+            last_run_date = now.date()
+        
+        time.sleep(60)  # Check every minute
 
