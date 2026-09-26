@@ -1,22 +1,11 @@
 """
 Anti-Spectacle Daily Newsletter - Ingestion Engine
 Runs daily at 4:30 AM PST -> filters -> drafts to Beehiiv
-Supports both google-generativeai (legacy) and google-genai (new SDK)
+Uses google-generativeai (legacy SDK) with gemini-2.0-flash (stable)
 """
 import feedparser, os, re, requests
 from datetime import datetime, timezone
-
-# Auto-detect SDK
-try:
-    import google.generativeai as genai
-    genai.configure(api_key=os.environ.get("GOOGLE_API_KEY") or os.environ.get("GEMINI_API_KEY"))
-    model = genai.GenerativeModel("gemini-2.5-flash")
-    SDK_TYPE = "google-generativeai (legacy)"
-except (ImportError, AttributeError):
-    import google.genai as genai
-    client = genai.Client(api_key=os.environ.get("GOOGLE_API_KEY") or os.environ.get("GEMINI_API_KEY"))
-    model = client.models
-    SDK_TYPE = "google-genai (new)"
+import google.generativeai as genai
 
 RSS_SOURCES = [
     "https://www.reuters.com/rssFeed/worldNews",
@@ -25,6 +14,13 @@ RSS_SOURCES = [
 ]
 
 SYSTEM_PROMPT = open(os.path.join(os.path.dirname(__file__), "system_prompt.txt")).read()
+
+# Configure with GOOGLE_API_KEY
+api_key = os.environ.get("GOOGLE_API_KEY", "").strip()
+if not api_key:
+    raise ValueError("GOOGLE_API_KEY environment variable is empty or not set")
+
+genai.configure(api_key=api_key)
 
 def fetch_rss():
     items = []
@@ -49,28 +45,27 @@ def filter_with_gemini(items):
     raw = "\n\n".join([f"SOURCE: {i['source']}\nTITLE: {i['title']}\nSUMMARY: {i['summary']}\nLINK: {i['link']}" for i in items[:30]])
     prompt = f"Filter these raw news items into the 4-section briefing format. Return markdown.\n\n{raw}"
     
-    if SDK_TYPE == "google-generativeai (legacy)":
-        # Legacy SDK
-        generative_model = genai.GenerativeModel("gemini-2.5-flash", system_instruction=SYSTEM_PROMPT,
-            generation_config={"temperature": 0.1})
-        resp = generative_model.generate_content(prompt)
-        return resp.text
-    else:
-        # New SDK
-        resp = model.generate_content(
-            model="gemini-2.5-flash",
-            contents=prompt,
-            config={
-                "system_instruction": SYSTEM_PROMPT,
-                "temperature": 0.1,
-            }
-        )
-        return resp.text
+    model_name = "gemini-2.0-flash"
+    generative_model = genai.GenerativeModel(
+        model_name,
+        system_instruction=SYSTEM_PROMPT,
+        generation_config={"temperature": 0.1}
+    )
+    print(f"Generating with legacy model {model_name}")
+    resp = generative_model.generate_content(prompt)
+    return resp.text
 
 def draft_to_beehiiv(markdown_body):
     # Beehiiv v2 API: create draft post
-    url = f"https://api.beehiiv.com/v2/publications/{os.environ.get('BEEHIIV_PUBLICATION_ID')}/posts"
-    headers = {"Authorization": f"Bearer {os.environ.get('BEEHIIV_API_KEY')}", "Content-Type": "application/json"}
+    pub_id = os.environ.get("BEEHIIV_PUBLICATION_ID")
+    api_key = os.environ.get("BEEHIIV_API_KEY")
+    
+    if not pub_id or not api_key:
+        print("Beehiiv credentials missing, skipping draft")
+        return None
+    
+    url = f"https://api.beehiiv.com/v2/publications/{pub_id}/posts"
+    headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
     data = {
         "title": f"The Signal — {datetime.now(timezone.utc).strftime('%B %d, %Y')}",
         "subtitle": "All signal, zero noise. Your 3-minute daily briefing.",
@@ -82,16 +77,26 @@ def draft_to_beehiiv(markdown_body):
     return r.json()
 
 if __name__ == "__main__":
-    print(f"Using {SDK_TYPE}")
+    print(f"GOOGLE_API_KEY present: {bool(api_key)} (length {len(api_key) if api_key else 0})")
+    print("Using google-generativeai (legacy SDK) with gemini-2.0-flash")
+    
     items = dedupe(fetch_rss())
     print(f"Fetched {len(items)} items")
+    
     briefing = filter_with_gemini(items)
-    print(briefing[:500])
-    # Uncomment to publish draft:
-    # result = draft_to_beehiiv(briefing)
-    # print("Draft created:", result.get("id"))
+    print(f"Briefing generated, length: {len(briefing)}")
+    
+    # Save locally
     os.makedirs("./data", exist_ok=True)
-    with open("./data/latest_briefing.md","w") as f:
+    with open("./data/latest_briefing.md", "w") as f:
         f.write(briefing)
-    print("Draft saved locally to ./data/latest_briefing.md")
+    print("Draft saved locally")
+    
+    # Push to Beehiiv if enabled
+    if os.environ.get("PUBLISH_TO_BEEHIIV") == "1":
+        result = draft_to_beehiiv(briefing)
+        if result:
+            print(f"Draft created on Beehiiv: {result.get('id')}")
+    else:
+        print("(Beehiiv publish disabled — set PUBLISH_TO_BEEHIIV=1 to enable)")
 

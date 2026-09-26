@@ -28,10 +28,11 @@ def job():
             f.write(briefing)
         print("Saved to ./data/latest_briefing.md")
         
-        # Push draft to Beehiiv if keys present
-        if os.getenv("BEEHIIV_API_KEY") and os.getenv("PUBLISH_TO_BEEHIIV") == "1":
+        # Push draft to Beehiiv if enabled
+        if os.getenv("PUBLISH_TO_BEEHIIV") == "1":
             res = draft_to_beehiiv(briefing)
-            print(f"Draft created: {res.get('id')}")
+            if res:
+                print(f"Draft created: {res.get('id')}")
         else:
             print("Beehiiv publish disabled (set PUBLISH_TO_BEEHIIV=1 to enable)")
     except Exception as e:
@@ -41,7 +42,7 @@ def job():
 
 def schedule_job():
     # Schedule at 4:30 AM PST = 12:30 PM UTC
-    # schedule library uses system time, so we use UTC
+    # schedule library uses system time (UTC in Railway)
     schedule.every().day.at("12:30").do(job)
     print("Worker scheduled for 12:30 UTC (4:30 AM PST)")
 
