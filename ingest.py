@@ -24,13 +24,16 @@ else:
 
 # --- NEW SDK ONLY - forced to v1 API (v1beta retired many models) ---
 _genai_client = None
-# These are the actual v1 models live in Sept 2026 - 1.5-flash is most stable
+# Live v1 models as of Sept 2026 - 2.5-flash is deprecated for new keys per Google error
+# Primary: 1.5-flash is most stable and always available, then 2.0 family
 _MODEL_CANDIDATES = [
     "gemini-1.5-flash",
     "gemini-1.5-flash-8b",
+    "gemini-1.5-pro",
     "gemini-2.0-flash",
     "gemini-2.0-flash-lite",
-    "gemini-2.5-flash"
+    "gemini-flash-latest",
+    "gemini-pro-latest"
 ]
 
 try:
@@ -99,6 +102,15 @@ def filter_with_gemini(items):
         has_types = False
     
     last_error = None
+    # Also try to list available models for debugging
+    try:
+        print("Listing available models for this API key...")
+        models_list = list(_genai_client.models.list())
+        available = [m.name for m in models_list[:10]]
+        print(f"Available models (first 10): {available}")
+    except Exception as e:
+        print(f"Could not list models: {e}")
+    
     for model_try in _MODEL_CANDIDATES:
         try:
             print(f"Trying new client with {model_try} (v1 API)")
