@@ -1,4 +1,5 @@
 feedparser
+google-generativeai==0.8.5
 google-genai
 requests
 schedule
