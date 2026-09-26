@@ -19,6 +19,10 @@ def job():
         items = dedupe(fetch_rss())
         print(f"Fetched {len(items)} items")
         
+        if len(items) == 0:
+            print("No items fetched, skipping.")
+            return
+        
         briefing = filter_with_gemini(items)
         print(f"Generated briefing ({len(briefing)} chars)")
         
@@ -34,7 +38,7 @@ def job():
             if res:
                 print(f"Draft created: {res.get('id')}")
         else:
-            print("Beehiiv publish disabled (set PUBLISH_TO_BEEHIIV=1 to enable)")
+            print("(Beehiiv publish disabled — set PUBLISH_TO_BEEHIIV=1 to enable)")
     except Exception as e:
         print(f"ERROR: {e}")
         import traceback
@@ -51,7 +55,7 @@ if __name__ == "__main__":
     
     # Run once on deploy for testing if RUN_ON_START=1
     if os.getenv("RUN_ON_START") == "1":
-        print("RUN_ON_START=1 detected — running now for test...")
+        print("RUN_ON_START=1 -> running now")
         job()
     
     print("Worker started. Listening for scheduled jobs...")

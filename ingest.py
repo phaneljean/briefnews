@@ -1,11 +1,10 @@
 """
 Anti-Spectacle Daily Newsletter - Ingestion Engine
 Runs daily at 4:30 AM PST -> filters -> drafts to Beehiiv
-Uses google-generativeai (legacy SDK) with gemini-2.0-flash (stable)
+Uses new google-genai SDK with gemini-1.5-flash (stable)
 """
 import feedparser, os, re, requests
 from datetime import datetime, timezone
-import google.generativeai as genai
 
 RSS_SOURCES = [
     "https://www.reuters.com/rssFeed/worldNews",
@@ -20,17 +19,26 @@ api_key = os.environ.get("GOOGLE_API_KEY", "").strip()
 if not api_key:
     raise ValueError("GOOGLE_API_KEY environment variable is empty or not set")
 
+print(f"GOOGLE_API_KEY present: {bool(api_key)} (length {len(api_key) if api_key else 0})")
+
+# Import new SDK
+import google.genai as genai
+print("Using google-genai (new SDK) with gemini-1.5-flash")
+
 genai.configure(api_key=api_key)
 
 def fetch_rss():
     items = []
     for url in RSS_SOURCES:
-        feed = feedparser.parse(url)
-        for e in feed.entries[:20]:
-            title = e.get("title","")
-            summary = re.sub(r'<[^>]+>', '', e.get("summary",""))
-            link = e.get("link","")
-            items.append({"title": title, "summary": summary[:800], "link": link, "source": url})
+        try:
+            feed = feedparser.parse(url)
+            for e in feed.entries[:20]:
+                title = e.get("title","")
+                summary = re.sub(r'<[^>]+>', '', e.get("summary",""))
+                link = e.get("link","")
+                items.append({"title": title, "summary": summary[:800], "link": link, "source": url})
+        except Exception as e:
+            print(f"Error fetching {url}: {e}")
     return items
 
 def dedupe(items):
@@ -45,27 +53,40 @@ def filter_with_gemini(items):
     raw = "\n\n".join([f"SOURCE: {i['source']}\nTITLE: {i['title']}\nSUMMARY: {i['summary']}\nLINK: {i['link']}" for i in items[:30]])
     prompt = f"Filter these raw news items into the 4-section briefing format. Return markdown.\n\n{raw}"
     
-    model_name = "gemini-2.0-flash"
-    generative_model = genai.GenerativeModel(
-        model_name,
-        system_instruction=SYSTEM_PROMPT,
-        generation_config={"temperature": 0.1}
-    )
-    print(f"Generating with legacy model {model_name}")
-    resp = generative_model.generate_content(prompt)
-    return resp.text
+    # Try gemini-1.5-flash (stable), fall back to 2.0-flash if needed
+    models = ["gemini-1.5-flash", "gemini-2.0-flash"]
+    
+    for model_name in models:
+        try:
+            print(f"Trying new client with {model_name}")
+            client = genai.Client(api_key=api_key)
+            resp = client.models.generate_content(
+                model=model_name,
+                contents=prompt,
+                config={
+                    "system_instruction": SYSTEM_PROMPT,
+                    "temperature": 0.1,
+                }
+            )
+            print(f"Success with {model_name}")
+            return resp.text
+        except Exception as e:
+            print(f"Failed with {model_name}: {e}")
+            continue
+    
+    raise Exception("All models failed")
 
 def draft_to_beehiiv(markdown_body):
     # Beehiiv v2 API: create draft post
     pub_id = os.environ.get("BEEHIIV_PUBLICATION_ID")
-    api_key = os.environ.get("BEEHIIV_API_KEY")
+    api_key_beehiiv = os.environ.get("BEEHIIV_API_KEY")
     
-    if not pub_id or not api_key:
+    if not pub_id or not api_key_beehiiv:
         print("Beehiiv credentials missing, skipping draft")
         return None
     
     url = f"https://api.beehiiv.com/v2/publications/{pub_id}/posts"
-    headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+    headers = {"Authorization": f"Bearer {api_key_beehiiv}", "Content-Type": "application/json"}
     data = {
         "title": f"The Signal — {datetime.now(timezone.utc).strftime('%B %d, %Y')}",
         "subtitle": "All signal, zero noise. Your 3-minute daily briefing.",
@@ -77,8 +98,7 @@ def draft_to_beehiiv(markdown_body):
     return r.json()
 
 if __name__ == "__main__":
-    print(f"GOOGLE_API_KEY present: {bool(api_key)} (length {len(api_key) if api_key else 0})")
-    print("Using google-generativeai (legacy SDK) with gemini-2.0-flash")
+    print("Imported ingest. GOOGLE_KEY present:", bool(api_key))
     
     items = dedupe(fetch_rss())
     print(f"Fetched {len(items)} items")
@@ -90,13 +110,12 @@ if __name__ == "__main__":
     os.makedirs("./data", exist_ok=True)
     with open("./data/latest_briefing.md", "w") as f:
         f.write(briefing)
-    print("Draft saved locally")
     
-    # Push to Beehiiv if enabled
-    if os.environ.get("PUBLISH_TO_BEEHIIV") == "1":
+    publish_enabled = os.environ.get("PUBLISH_TO_BEEHIIV") == "1"
+    if publish_enabled:
         result = draft_to_beehiiv(briefing)
         if result:
             print(f"Draft created on Beehiiv: {result.get('id')}")
     else:
-        print("(Beehiiv publish disabled — set PUBLISH_TO_BEEHIIV=1 to enable)")
+        print("Draft saved locally (PUBLISH_TO_BEEHIIV=0)")
 
