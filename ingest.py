@@ -4,7 +4,7 @@ Runs daily at 4:30 AM PST -> filters -> drafts to Beehiiv
 """
 import feedparser, os, re, requests
 from datetime import datetime, timezone
-import google.generativeai as genai
+import google.genai as genai
 
 RSS_SOURCES = [
     "https://www.reuters.com/rssFeed/worldNews",
@@ -14,12 +14,12 @@ RSS_SOURCES = [
 
 SYSTEM_PROMPT = open(os.path.join(os.path.dirname(__file__), "system_prompt.txt")).read()
 
-genai.configure(api_key=os.environ["GEMINI_API_KEY"])
+genai.configure(api_key=os.environ.get("GOOGLE_API_KEY") or os.environ.get("GEMINI_API_KEY"))
 model = genai.GenerativeModel("gemini-2.5-flash", system_instruction=SYSTEM_PROMPT,
     generation_config={"temperature": 0.1})
 
-BEEHIIV_API_KEY = os.environ["BEEHIIV_API_KEY"]
-BEEHIIV_PUBLICATION_ID = os.environ["BEEHIIV_PUBLICATION_ID"]
+BEEHIIV_API_KEY = os.environ.get("BEEHIIV_API_KEY")
+BEEHIIV_PUBLICATION_ID = os.environ.get("BEEHIIV_PUBLICATION_ID")
 
 def fetch_rss():
     items = []
