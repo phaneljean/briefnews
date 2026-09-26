@@ -1,0 +1,6 @@
+feedparser
+google-generativeai
+requests
+schedule
+pytz
+
