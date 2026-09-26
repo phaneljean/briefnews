@@ -22,20 +22,39 @@ if GOOGLE_KEY:
 else:
     print("WARNING: No GOOGLE_API_KEY set")
 
-# --- NEW SDK ONLY ---
+# --- NEW SDK ONLY - forced to v1 API (v1beta retired many models) ---
 _genai_client = None
-_MODEL_CANDIDATES = ["gemini-1.5-flash", "gemini-1.5-flash-latest", "gemini-2.0-flash", "gemini-pro"]
+# These are the actual v1 models live in Sept 2026 - 1.5-flash is most stable
+_MODEL_CANDIDATES = [
+    "gemini-1.5-flash",
+    "gemini-1.5-flash-8b",
+    "gemini-2.0-flash",
+    "gemini-2.0-flash-lite",
+    "gemini-2.5-flash"
+]
 
 try:
     from google import genai
+    from google.genai import types
     if GOOGLE_KEY:
-        _genai_client = genai.Client(api_key=GOOGLE_KEY)
-        print(f"Using google-genai new SDK with {_MODEL_CANDIDATES[0]}")
+        # Force v1 API - v1beta returns 404 for gemini-pro and others
+        _genai_client = genai.Client(
+            api_key=GOOGLE_KEY,
+            http_options={"api_version": "v1"}
+        )
+        print(f"Using google-genai new SDK (v1 API) with {_MODEL_CANDIDATES[0]}")
     else:
         print("No key for new SDK")
 except Exception as e:
     print(f"Failed to init google-genai client: {e}")
-    _genai_client = None
+    try:
+        # Fallback without http_options for older versions of the library
+        from google import genai as genai_fallback
+        _genai_client = genai_fallback.Client(api_key=GOOGLE_KEY) if GOOGLE_KEY else None
+        print(f"Fallback client init: {bool(_genai_client)}")
+    except Exception as e2:
+        print(f"Fallback also failed: {e2}")
+        _genai_client = None
 
 BEEHIIV_API_KEY = os.environ.get("BEEHIIV_API_KEY", "")
 BEEHIIV_PUBLICATION_ID = os.environ.get("BEEHIIV_PUBLICATION_ID", "")
@@ -72,21 +91,39 @@ def filter_with_gemini(items):
     raw = "\n\n".join([f"SOURCE: {i['source']}\nTITLE: {i['title']}\nSUMMARY: {i['summary']}\nLINK: {i['link']}" for i in items[:30]])
     prompt = f"Filter these raw news items into the 4-section briefing format. Return markdown.\n\n{raw}"
     
+    # Import types for config
+    try:
+        from google.genai import types
+        has_types = True
+    except:
+        has_types = False
+    
     last_error = None
     for model_try in _MODEL_CANDIDATES:
         try:
-            print(f"Trying new client with {model_try}")
-            resp = _genai_client.models.generate_content(
-                model=model_try,
-                contents=prompt,
-                config={"system_instruction": SYSTEM_PROMPT, "temperature": 0.1}
-            )
+            print(f"Trying new client with {model_try} (v1 API)")
+            if has_types:
+                resp = _genai_client.models.generate_content(
+                    model=model_try,
+                    contents=prompt,
+                    config=types.GenerateContentConfig(
+                        system_instruction=SYSTEM_PROMPT,
+                        temperature=0.1
+                    )
+                )
+            else:
+                resp = _genai_client.models.generate_content(
+                    model=model_try,
+                    contents=prompt,
+                    config={"system_instruction": SYSTEM_PROMPT, "temperature": 0.1}
+                )
             print(f"Success with {model_try}")
             return resp.text
         except Exception as e:
             print(f"Model {model_try} failed: {e}")
             last_error = e
             try:
+                print(f"Retrying {model_try} without system_instruction")
                 resp = _genai_client.models.generate_content(
                     model=model_try,
                     contents=f"{SYSTEM_PROMPT}\n\n{prompt}"
