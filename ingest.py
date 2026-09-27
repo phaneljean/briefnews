@@ -1,7 +1,6 @@
 """
 Anti-Spectacle Daily Newsletter - Ingestion Engine
-NEW SDK ONLY: google-genai (Client API)
-No genai.configure() - that method does not exist in new SDK
+FINAL: Chats API + dynamic model discovery - no hardcoded -latest aliases
 """
 import feedparser, os, re, requests
 from datetime import datetime, timezone
@@ -14,7 +13,6 @@ RSS_SOURCES = [
 
 SYSTEM_PROMPT = open(os.path.join(os.path.dirname(__file__), "system_prompt.txt")).read()
 
-# Support both env var names - GOOGLE_API_KEY is new, GEMINI_API_KEY is legacy
 GOOGLE_KEY = (os.environ.get("GOOGLE_API_KEY") or os.environ.get("GEMINI_API_KEY") or "").strip()
 if GOOGLE_KEY:
     os.environ["GOOGLE_API_KEY"] = GOOGLE_KEY
@@ -22,41 +20,26 @@ if GOOGLE_KEY:
 else:
     print("WARNING: No GOOGLE_API_KEY set")
 
-# --- NEW SDK ONLY - forced to v1 API (v1beta retired many models) ---
 _genai_client = None
-# Live v1 models as of Sept 2026 - 2.5-flash is deprecated for new keys per Google error
-# Primary: 1.5-flash is most stable and always available, then 2.0 family
-_MODEL_CANDIDATES = [
-    "gemini-1.5-flash",
-    "gemini-1.5-flash-8b",
-    "gemini-1.5-pro",
-    "gemini-2.0-flash",
-    "gemini-2.0-flash-lite",
-    "gemini-flash-latest",
-    "gemini-pro-latest"
-]
-
 try:
     from google import genai
     from google.genai import types
     if GOOGLE_KEY:
-        # Force v1 API - v1beta returns 404 for gemini-pro and others
         _genai_client = genai.Client(
             api_key=GOOGLE_KEY,
             http_options={"api_version": "v1"}
         )
-        print(f"Using google-genai new SDK (v1 API) with {_MODEL_CANDIDATES[0]}")
+        print(f"Using google-genai v1 API client")
     else:
-        print("No key for new SDK")
+        print("No key")
 except Exception as e:
-    print(f"Failed to init google-genai client: {e}")
+    print(f"Failed to init client v1: {e}")
     try:
-        # Fallback without http_options for older versions of the library
         from google import genai as genai_fallback
         _genai_client = genai_fallback.Client(api_key=GOOGLE_KEY) if GOOGLE_KEY else None
-        print(f"Fallback client init: {bool(_genai_client)}")
+        print(f"Fallback client: {bool(_genai_client)}")
     except Exception as e2:
-        print(f"Fallback also failed: {e2}")
+        print(f"Fallback failed: {e2}")
         _genai_client = None
 
 BEEHIIV_API_KEY = os.environ.get("BEEHIIV_API_KEY", "")
@@ -89,65 +72,82 @@ def filter_with_gemini(items):
         return "No items fetched today."
     
     if _genai_client is None:
-        raise RuntimeError(f"Gemini client not initialized - GOOGLE_API_KEY present={bool(GOOGLE_KEY)}")
+        raise RuntimeError(f"Gemini client not initialized - key present={bool(GOOGLE_KEY)}")
     
     raw = "\n\n".join([f"SOURCE: {i['source']}\nTITLE: {i['title']}\nSUMMARY: {i['summary']}\nLINK: {i['link']}" for i in items[:30]])
     prompt = f"Filter these raw news items into the 4-section briefing format. Return markdown.\n\n{raw}"
     
-    # Import types for config
+    # Discover live models - this is source of truth
+    live_models = []
+    try:
+        print("Listing available models for this API key...")
+        for m in _genai_client.models.list():
+            name = m.name.replace("models/", "")
+            if "gemini" in name and ("flash" in name or "pro" in name):
+                # skip embedding, vision, etc
+                if "embed" in name or "vision" in name or "image" in name:
+                    continue
+                live_models.append(name)
+        print(f"Live models found: {live_models[:20]}")
+    except Exception as e:
+        print(f"Could not list models: {e}")
+    
+    # If discovery worked, use those. Otherwise fallback to known-good v1 models
+    if live_models:
+        candidates = [m for m in live_models if "latest" not in m][:8]
+        # Prefer 1.5-flash first
+        candidates = sorted(candidates, key=lambda x: (0 if "1.5-flash" in x else 1 if "2.0-flash" in x else 2))
+        print(f"Using discovered candidates: {candidates}")
+    else:
+        candidates = [
+            "gemini-1.5-flash",
+            "gemini-1.5-flash-8b",
+            "gemini-2.0-flash",
+            "gemini-2.0-flash-lite",
+            "gemini-1.5-pro",
+        ]
+        print(f"Using hardcoded fallback candidates: {candidates}")
+    
+    last_error = None
     try:
         from google.genai import types
         has_types = True
     except:
         has_types = False
     
-    last_error = None
-    # Also try to list available models for debugging
-    try:
-        print("Listing available models for this API key...")
-        models_list = list(_genai_client.models.list())
-        available = [m.name for m in models_list[:10]]
-        print(f"Available models (first 10): {available}")
-    except Exception as e:
-        print(f"Could not list models: {e}")
-    
-    for model_try in _MODEL_CANDIDATES:
+    for model_try in candidates:
         try:
-            print(f"Trying new client with {model_try} (v1 API)")
+            print(f"Trying Chat API with {model_try}")
             if has_types:
-                resp = _genai_client.models.generate_content(
+                chat = _genai_client.chats.create(
                     model=model_try,
-                    contents=prompt,
                     config=types.GenerateContentConfig(
                         system_instruction=SYSTEM_PROMPT,
                         temperature=0.1
                     )
                 )
             else:
-                resp = _genai_client.models.generate_content(
-                    model=model_try,
-                    contents=prompt,
-                    config={"system_instruction": SYSTEM_PROMPT, "temperature": 0.1}
-                )
-            print(f"Success with {model_try}")
+                chat = _genai_client.chats.create(model=model_try)
+            resp = chat.send_message(prompt)
+            print(f"SUCCESS with {model_try} via Chats API - length {len(resp.text)}")
             return resp.text
         except Exception as e:
-            print(f"Model {model_try} failed: {e}")
+            print(f"Chat API {model_try} failed: {e}")
             last_error = e
             try:
-                print(f"Retrying {model_try} without system_instruction")
+                print(f"Retrying {model_try} via models.generate_content")
                 resp = _genai_client.models.generate_content(
                     model=model_try,
                     contents=f"{SYSTEM_PROMPT}\n\n{prompt}"
                 )
-                print(f"Success with {model_try} (fallback prompt)")
+                print(f"SUCCESS with {model_try} via generate_content - length {len(resp.text)}")
                 return resp.text
             except Exception as e2:
                 print(f"Fallback also failed for {model_try}: {e2}")
                 last_error = e2
                 continue
     
-    raise RuntimeError(f"No Gemini model succeeded. Tried {_MODEL_CANDIDATES}. Last error: {last_error}")
+    raise RuntimeError(f"No Gemini model succeeded. Tried {candidates}. Last error: {last_error}")
 
 def draft_to_beehiiv(markdown_body):
     if os.environ.get("PUBLISH_TO_BEEHIIV", "1") == "0":
@@ -179,4 +179,3 @@ if __name__ == "__main__":
     with open(out_path,"w") as f:
         f.write(briefing)
     print(f"Saved to {out_path}")
-
