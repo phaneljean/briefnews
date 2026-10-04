@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>The Signal · {{ title }}</title>
+{% if state.running %}<meta http-equiv="refresh" content="10">{% endif %}
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&display=swap" rel="stylesheet">
+<style>
+:root{--ink:#111;--muted:#666;--faint:#999;--line:#e7e5e0;--paper:#fbfaf7;--card:#fff;--accent:#111;--warn:#9a3412;--warn-bg:#fff7ed;--ok:#166534;--ok-bg:#f0fdf4}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--ink:#eee;--muted:#aaa;--faint:#777;--line:#2c2c2c;--paper:#141414;--card:#1b1b1b;--accent:#eee;--warn:#fdba74;--warn-bg:#2a1a0e;--ok:#86efac;--ok-bg:#0f2417}}
+*{box-sizing:border-box}body{margin:0;background:var(--paper);color:var(--ink);font:15px/1.55 Inter,system-ui,sans-serif}
+a{color:inherit}.wrap{max-width:1080px;margin:0 auto;padding:0 16px}
+header{border-bottom:1px solid var(--line);background:var(--card)}header .wrap{display:flex;align-items:center;justify-content:space-between;height:60px;gap:12px}
+.brand{font:600 20px/1 "Source Serif 4",Georgia,serif;text-decoration:none}.brand span{color:var(--faint);font:500 12px Inter,sans-serif;margin-left:8px}
+.grid{display:grid;gap:24px;padding:28px 0 64px}@media(min-width:900px){.grid{grid-template-columns:1fr 300px}}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:20px}
+.eyebrow{font:500 11px ui-monospace,Menlo,monospace;letter-spacing:.08em;text-transform:uppercase;color:var(--faint)}
+article{font:17px/1.65 "Source Serif 4",Georgia,serif;padding:28px 32px}@media(max-width:600px){article{padding:20px}}
+article h1{font-size:30px;line-height:1.15;margin:4px 0 4px}article h2{font:600 13px Inter,sans-serif;letter-spacing:.06em;text-transform:uppercase;border-top:1px solid var(--line);padding-top:18px;margin:28px 0 8px}
+article li{margin:8px 0}article a{color:var(--muted);text-decoration:underline;text-underline-offset:2px;font-size:.9em}
+.meta{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px}.chip{font:11px ui-monospace,Menlo,monospace;border:1px solid var(--line);border-radius:999px;padding:2px 8px;color:var(--muted)}
+.chip.ok{background:var(--ok-bg);color:var(--ok);border-color:transparent}.chip.warn{background:var(--warn-bg);color:var(--warn);border-color:transparent}
+.side{display:grid;gap:16px;align-content:start}.kv{display:grid;gap:8px;font-size:13px}.kv div{display:flex;justify-content:space-between;gap:10px}.kv span:first-child{color:var(--muted)}
+button{font:600 14px Inter,sans-serif;background:var(--accent);color:var(--paper);border:0;border-radius:999px;padding:10px 16px;cursor:pointer;width:100%}button:disabled{opacity:.5;cursor:default}
+label.check{display:flex;gap:8px;align-items:center;font-size:13px;color:var(--muted);margin:12px 0}
+.list a{display:flex;justify-content:space-between;gap:8px;padding:8px 0;border-top:1px solid var(--line);text-decoration:none;font-size:13px}.list a:first-child{border-top:0}.list a.on{font-weight:600}
+.warnbox{background:var(--warn-bg);color:var(--warn);border-radius:10px;padding:12px 14px;font-size:13px;margin-top:14px;overflow-wrap:anywhere}
+.empty{color:var(--muted);text-align:center;padding:48px 20px}
+</style></head><body>
+<header><div class="wrap"><a class="brand" href="/admin">The Signal<span>briefing desk</span></a>
+<a class="chip" href="/" style="text-decoration:none">Public site ↗</a>
+<span class="chip {{ 'warn' if state.running else 'ok' }}">{{ 'Running now…' if state.running else 'Next run ' + next_run.strftime('%a %b %d, %-I:%M %p %Z') }}</span></div></header>
+<main class="wrap grid">
+  <div>
+  {% if run %}
+    <article class="card">
+      <div class="eyebrow">{{ run.created[:10] }} · {{ run.trigger }}</div>
+      {{ body|safe }}
+      <div class="meta" style="font-family:Inter,sans-serif">
+        <span class="chip">{{ run.model }}</span>
+        <span class="chip">{{ run.items }} items · {{ run.sources|length }} sources</span>
+        {% if run.beehiiv %}<span class="chip ok">Beehiiv draft created</span>{% else %}<span class="chip">Not sent to Beehiiv</span>{% endif %}
+        {% if run.flagged_links %}<span class="chip warn">{{ run.flagged_links|length }} unverified link{{ 's' if run.flagged_links|length != 1 }}</span>{% endif %}
+      </div>
+      {% if run.flagged_links %}<div class="warnbox" style="font-family:Inter,sans-serif"><b>Check before sending:</b> these links weren't in the day's feeds.<br>{% for u in run.flagged_links %}{{ u }}<br>{% endfor %}</div>{% endif %}
+    </article>
+  {% else %}
+    <div class="card empty">No briefings yet. Use “Run now”, or wait for the next scheduled run.</div>
+  {% endif %}
+  </div>
+  <aside class="side">
+    <form class="card" method="post" action="/run">
+      <div class="eyebrow">Run now</div>
+      <label class="check"><input type="checkbox" name="push" value="1"> Also create a Beehiiv draft</label>
+      <button {{ 'disabled' if state.running }}>{{ 'Running…' if state.running else 'Generate briefing' }}</button>
+      {% if state.last_error %}<div class="warnbox">Last run failed: {{ state.last_error }}</div>{% endif %}
+    </form>
+    <div class="card kv">
+      <div class="eyebrow">Schedule</div>
+      <div><span>Daily at</span><span>{{ run_at }} Pacific</span></div>
+      <div><span>Beehiiv push</span><span>{{ 'On' if push_on else 'Off' }}</span></div>
+    </div>
+    <div class="card">
+      <div class="eyebrow" style="margin-bottom:6px">History</div>
+      <div class="list">
+      {% for r in runs %}<a href="/admin/b/{{ r.id }}" class="{{ 'on' if run and r.id == run.id }}"><span>{{ r.created[:10] }} {{ r.created[11:16] }}</span><span class="chip">{{ r.trigger }}</span></a>
+      {% else %}<div style="color:var(--muted);font-size:13px">Nothing yet.</div>{% endfor %}
+      </div>
+    </div>
+  </aside>
+</main></body></html>

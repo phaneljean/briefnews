@@ -2,7 +2,7 @@
 Anti-Spectacle Daily Newsletter - Ingestion Engine
 RSS -> dedupe -> Gemini filter -> Beehiiv draft. Uses the google-genai SDK.
 """
-import feedparser, os, re, requests
+import feedparser, os, re, requests, time
 from datetime import datetime, timezone
 
 import markdown as md
@@ -116,21 +116,35 @@ def filter_with_gemini(items):
     models = pick_models()
     if not models:
         raise RuntimeError("No usable Gemini models for this API key (set GEMINI_MODEL to force one)")
-    print(f"Model order: {models[:5]}")
-    last_error = None
-    for model in models[:5]:
-        try:
-            resp = _genai_client.models.generate_content(
-                model=model, contents=prompt,
-                config=types.GenerateContentConfig(system_instruction=SYSTEM_PROMPT, temperature=0.1))
-            if resp.text:
-                print(f"Success with {model}")
-                return resp.text, model
-            last_error = f"{model} returned no text"
-        except Exception as e:
-            print(f"Model {model} failed: {e}")
-            last_error = e
-    raise RuntimeError(f"No Gemini model succeeded. Tried {models[:5]}. Last error: {last_error}")
+    models = models[:8]
+    print(f"Model order: {models}")
+    last_error, gone = None, set()
+    # Busy models (503/429) are common at peak times: wait and retry the list.
+    for attempt in range(3):
+        if attempt:
+            wait = 30 * attempt
+            print(f"All models busy; retrying in {wait}s (round {attempt + 1}/3)")
+            time.sleep(wait)
+        for model in models:
+            if model in gone:
+                continue
+            try:
+                resp = _genai_client.models.generate_content(
+                    model=model, contents=prompt,
+                    config=types.GenerateContentConfig(system_instruction=SYSTEM_PROMPT, temperature=0.1))
+                if resp.text:
+                    print(f"Success with {model}")
+                    return resp.text, model
+                last_error = f"{model} returned no text"
+            except Exception as e:
+                msg = str(e)
+                print(f"Model {model} failed: {msg[:160]}")
+                last_error = e
+                if "404" in msg or "NOT_FOUND" in msg:
+                    gone.add(model)  # retired or unavailable to this key; don't retry
+        if len(gone) == len(models):
+            break
+    raise RuntimeError(f"No Gemini model succeeded. Tried {models}. Last error: {last_error}")
 
 
 def unknown_links(briefing, items):

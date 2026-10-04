@@ -5,12 +5,13 @@ Serves the latest and past briefings behind a password, and runs the daily
 ingestion at RUN_AT (Pacific) from a background thread. Run it with exactly
 one gunicorn worker so there is only ever one scheduler.
 """
-import hmac, json, os, threading, time, traceback
+import hmac, json, math, os, re, threading, time, traceback
 from datetime import datetime, timedelta
 
 import markdown as md
 import pytz
-from flask import Flask, Response, abort, redirect, render_template_string, request, url_for
+import requests
+from flask import Flask, Response, abort, redirect, render_template, request, url_for
 
 from ingest import run_once
 
@@ -119,9 +120,12 @@ if os.getenv("SCHEDULER", "1") == "1":
 
 # ---------------------------------------------------------------- auth
 
+PUBLIC_ENDPOINTS = {"home", "issue", "archive", "subscribe", "healthz", "static"}
+
+
 @app.before_request
 def require_password():
-    if request.endpoint == "healthz":
+    if request.endpoint in PUBLIC_ENDPOINTS:
         return None
     if not PASSWORD:
         return Response("Set DASHBOARD_PASSWORD to use the dashboard.", 503)
@@ -133,92 +137,24 @@ def require_password():
 
 # ---------------------------------------------------------------- pages
 
-PAGE = """<!doctype html>
-<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<title>The Signal · {{ title }}</title>
-{% if state.running %}<meta http-equiv="refresh" content="10">{% endif %}
-<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&display=swap" rel="stylesheet">
-<style>
-:root{--ink:#111;--muted:#666;--faint:#999;--line:#e7e5e0;--paper:#fbfaf7;--card:#fff;--accent:#111;--warn:#9a3412;--warn-bg:#fff7ed;--ok:#166534;--ok-bg:#f0fdf4}
-@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--ink:#eee;--muted:#aaa;--faint:#777;--line:#2c2c2c;--paper:#141414;--card:#1b1b1b;--accent:#eee;--warn:#fdba74;--warn-bg:#2a1a0e;--ok:#86efac;--ok-bg:#0f2417}}
-*{box-sizing:border-box}body{margin:0;background:var(--paper);color:var(--ink);font:15px/1.55 Inter,system-ui,sans-serif}
-a{color:inherit}.wrap{max-width:1080px;margin:0 auto;padding:0 16px}
-header{border-bottom:1px solid var(--line);background:var(--card)}header .wrap{display:flex;align-items:center;justify-content:space-between;height:60px;gap:12px}
-.brand{font:600 20px/1 "Source Serif 4",Georgia,serif;text-decoration:none}.brand span{color:var(--faint);font:500 12px Inter,sans-serif;margin-left:8px}
-.grid{display:grid;gap:24px;padding:28px 0 64px}@media(min-width:900px){.grid{grid-template-columns:1fr 300px}}
-.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:20px}
-.eyebrow{font:500 11px ui-monospace,Menlo,monospace;letter-spacing:.08em;text-transform:uppercase;color:var(--faint)}
-article{font:17px/1.65 "Source Serif 4",Georgia,serif;padding:28px 32px}@media(max-width:600px){article{padding:20px}}
-article h1{font-size:30px;line-height:1.15;margin:4px 0 4px}article h2{font:600 13px Inter,sans-serif;letter-spacing:.06em;text-transform:uppercase;border-top:1px solid var(--line);padding-top:18px;margin:28px 0 8px}
-article li{margin:8px 0}article a{color:var(--muted);text-decoration:underline;text-underline-offset:2px;font-size:.9em}
-.meta{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px}.chip{font:11px ui-monospace,Menlo,monospace;border:1px solid var(--line);border-radius:999px;padding:2px 8px;color:var(--muted)}
-.chip.ok{background:var(--ok-bg);color:var(--ok);border-color:transparent}.chip.warn{background:var(--warn-bg);color:var(--warn);border-color:transparent}
-.side{display:grid;gap:16px;align-content:start}.kv{display:grid;gap:8px;font-size:13px}.kv div{display:flex;justify-content:space-between;gap:10px}.kv span:first-child{color:var(--muted)}
-button{font:600 14px Inter,sans-serif;background:var(--accent);color:var(--paper);border:0;border-radius:999px;padding:10px 16px;cursor:pointer;width:100%}button:disabled{opacity:.5;cursor:default}
-label.check{display:flex;gap:8px;align-items:center;font-size:13px;color:var(--muted);margin:12px 0}
-.list a{display:flex;justify-content:space-between;gap:8px;padding:8px 0;border-top:1px solid var(--line);text-decoration:none;font-size:13px}.list a:first-child{border-top:0}.list a.on{font-weight:600}
-.warnbox{background:var(--warn-bg);color:var(--warn);border-radius:10px;padding:12px 14px;font-size:13px;margin-top:14px;overflow-wrap:anywhere}
-.empty{color:var(--muted);text-align:center;padding:48px 20px}
-</style></head><body>
-<header><div class="wrap"><a class="brand" href="/">The Signal<span>briefing desk</span></a>
-<span class="chip {{ 'warn' if state.running else 'ok' }}">{{ 'Running now…' if state.running else 'Next run ' + next_run.strftime('%a %b %d, %-I:%M %p %Z') }}</span></div></header>
-<main class="wrap grid">
-  <div>
-  {% if run %}
-    <article class="card">
-      <div class="eyebrow">{{ run.created[:10] }} · {{ run.trigger }}</div>
-      {{ body|safe }}
-      <div class="meta" style="font-family:Inter,sans-serif">
-        <span class="chip">{{ run.model }}</span>
-        <span class="chip">{{ run.items }} items · {{ run.sources|length }} sources</span>
-        {% if run.beehiiv %}<span class="chip ok">Beehiiv draft created</span>{% else %}<span class="chip">Not sent to Beehiiv</span>{% endif %}
-        {% if run.flagged_links %}<span class="chip warn">{{ run.flagged_links|length }} unverified link{{ 's' if run.flagged_links|length != 1 }}</span>{% endif %}
-      </div>
-      {% if run.flagged_links %}<div class="warnbox" style="font-family:Inter,sans-serif"><b>Check before sending:</b> these links weren't in the day's feeds.<br>{% for u in run.flagged_links %}{{ u }}<br>{% endfor %}</div>{% endif %}
-    </article>
-  {% else %}
-    <div class="card empty">No briefings yet. Use “Run now”, or wait for the next scheduled run.</div>
-  {% endif %}
-  </div>
-  <aside class="side">
-    <form class="card" method="post" action="/run">
-      <div class="eyebrow">Run now</div>
-      <label class="check"><input type="checkbox" name="push" value="1"> Also create a Beehiiv draft</label>
-      <button {{ 'disabled' if state.running }}>{{ 'Running…' if state.running else 'Generate briefing' }}</button>
-      {% if state.last_error %}<div class="warnbox">Last run failed: {{ state.last_error }}</div>{% endif %}
-    </form>
-    <div class="card kv">
-      <div class="eyebrow">Schedule</div>
-      <div><span>Daily at</span><span>{{ run_at }} Pacific</span></div>
-      <div><span>Beehiiv push</span><span>{{ 'On' if push_on else 'Off' }}</span></div>
-    </div>
-    <div class="card">
-      <div class="eyebrow" style="margin-bottom:6px">History</div>
-      <div class="list">
-      {% for r in runs %}<a href="/b/{{ r.id }}" class="{{ 'on' if run and r.id == run.id }}"><span>{{ r.created[:10] }} {{ r.created[11:16] }}</span><span class="chip">{{ r.trigger }}</span></a>
-      {% else %}<div style="color:var(--muted);font-size:13px">Nothing yet.</div>{% endfor %}
-      </div>
-    </div>
-  </aside>
-</main></body></html>"""
+
 
 
 def render(run):
     body = md.markdown(run["briefing"]) if run else ""
     title = run["created"][:10] if run else "dashboard"
-    return render_template_string(PAGE, run=run, body=body, runs=list_runs(), state=_state, title=title,
+    return render_template("admin.html", run=run, body=body, runs=list_runs(), state=_state, title=title,
                                   next_run=next_run(), run_at=RUN_AT,
                                   push_on=os.getenv("PUBLISH_TO_BEEHIIV", "1") != "0")
 
 
-@app.get("/")
-def index():
+@app.get("/admin")
+def admin():
     runs = list_runs(1)
     return render(load_run(runs[0]["id"]) if runs else None)
 
 
-@app.get("/b/<run_id>")
+@app.get("/admin/b/<run_id>")
 def briefing(run_id):
     return render(load_run(run_id) or abort(404))
 
@@ -228,7 +164,111 @@ def run_now():
     if not _state["running"]:
         threading.Thread(target=job, args=("manual", request.form.get("push") == "1"), daemon=True).start()
         time.sleep(0.3)
-    return redirect(url_for("index"), 303)
+    return redirect(url_for("admin"), 303)
+
+
+# ---------------------------------------------------------------- public site
+
+def public_runs(limit=60):
+    """Issues safe to show publicly: no links that weren't in the day's feeds."""
+    return [r for r in list_runs(limit * 2) if not r.get("flagged_links")][:limit]
+
+
+_SENTENCE_END = re.compile(r"(?<!\b[A-Z])\.(?=\s+[A-Z(\"“])")
+
+
+def _bold_lead(bullet):
+    """Bold the first sentence of a story, newspaper style."""
+    m = _SENTENCE_END.search(bullet)
+    if not m or m.end() > 220:
+        return bullet
+    rest = bullet[m.end():].strip()
+    if not re.sub(r"\(?\[[^\]]*\]\([^)]*\)\)?|https?://\S+", "", rest).strip():
+        return bullet  # one-sentence story: nothing to set apart
+    return f"**{bullet[:m.end()].strip()}** {rest}"
+
+
+def issue_view(run):
+    """Split a briefing into numbered sections for the front-page layout."""
+    text = run["briefing"]
+    sections = []
+    for chunk in re.split(r"^##\s+", text, flags=re.M)[1:]:
+        title, _, body = chunk.partition("\n")
+        m = re.match(r"(\d+)[.)]?\s*(.*)", title.strip())
+        num, name = (m.group(1), m.group(2)) if m else (str(len(sections) + 1), title.strip())
+        lines = [re.sub(r"^\s*[-*]\s+", "", ln) for ln in body.splitlines() if re.match(r"^\s*[-*]\s+", ln)]
+        noise = "noise" in name.lower()
+        items = [md.markdown(ln if noise else _bold_lead(ln))[3:-4] for ln in lines]  # strip <p></p>
+        sections.append({"n": num.zfill(2), "title": name, "items": items, "noise": noise})
+    words = len(re.sub(r"https?://\S+|\[|\]|\(|\)", " ", text).split())
+    stories = sum(len(s["items"]) for s in sections if not s["noise"])
+    all_runs = sorted(r["id"] for r in list_runs(10000))
+    created = datetime.fromisoformat(run["created"])
+    return {"id": run["id"], "sections": sections, "stories": stories,
+            "minutes": max(1, math.ceil(words / 230)), "sources": run.get("sources", []),
+            "number": all_runs.index(run["id"]) + 1 if run["id"] in all_runs else None,
+            "date": created.strftime("%A, %B %-d, %Y")}
+
+
+def subscribe_to_beehiiv(email):
+    pub, key = os.getenv("BEEHIIV_PUBLICATION_ID", ""), os.getenv("BEEHIIV_API_KEY", "")
+    if not pub or not key:
+        raise RuntimeError("Subscriptions aren't set up yet.")
+    r = requests.post(f"https://api.beehiiv.com/v2/publications/{pub}/subscriptions",
+                      headers={"Authorization": f"Bearer {key}"},
+                      json={"email": email, "reactivate_existing": False, "send_welcome_email": True,
+                            "utm_source": "website", "referring_site": "the-signal-home"}, timeout=15)
+    if not r.ok:
+        print(f"Beehiiv subscribe failed {r.status_code}: {r.text[:200]}")
+        raise RuntimeError("We couldn't add you right now. Please try again in a minute.")
+
+
+_recent_signups = {}  # ip -> [timestamps], a light guard against form spam
+
+
+@app.get("/")
+def home():
+    runs = public_runs(1)
+    view = issue_view(load_run(runs[0]["id"])) if runs else None
+    return render_template("home.html", issue=view, status=request.args.get("s"),
+                           message=request.args.get("m"))
+
+
+@app.get("/issue/<run_id>")
+def issue(run_id):
+    run = load_run(run_id)
+    if not run or run.get("flagged_links"):
+        abort(404)
+    return render_template("issue.html", issue=issue_view(run))
+
+
+@app.get("/archive")
+def archive():
+    items = []
+    for r in public_runs(90):
+        created = datetime.fromisoformat(r["created"])
+        items.append({"id": r["id"], "date": created.strftime("%a, %b %-d, %Y"), "items": r.get("items")})
+    return render_template("archive.html", runs=items)
+
+
+@app.post("/subscribe")
+def subscribe():
+    email = (request.form.get("email") or "").strip().lower()
+    if request.form.get("website"):  # honeypot field real people never fill in
+        return redirect(url_for("home", s="ok") + "#subscribe", 303)
+    if not re.fullmatch(r"[^\s@]+@[^\s@]+\.[^\s@]{2,}", email) or len(email) > 254:
+        return redirect(url_for("home", s="err", m="Enter a valid email address.") + "#subscribe", 303)
+    ip = (request.headers.get("X-Forwarded-For", request.remote_addr or "").split(",")[0]).strip()
+    now = time.time()
+    hits = [t for t in _recent_signups.get(ip, []) if now - t < 3600]
+    if len(hits) >= 5:
+        return redirect(url_for("home", s="err", m="Too many sign-ups from this network. Try again later.") + "#subscribe", 303)
+    _recent_signups[ip] = hits + [now]
+    try:
+        subscribe_to_beehiiv(email)
+    except RuntimeError as e:
+        return redirect(url_for("home", s="err", m=str(e)) + "#subscribe", 303)
+    return redirect(url_for("home", s="ok") + "#subscribe", 303)
 
 
 @app.get("/healthz")

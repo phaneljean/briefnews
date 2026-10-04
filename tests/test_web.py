@@ -22,13 +22,16 @@ class WebTest(unittest.TestCase):
         shutil.rmtree(self.dir)
 
     def test_password_required(self):
-        self.assertEqual(self.c.get("/").status_code, 401)
+        self.assertEqual(self.c.get("/admin").status_code, 401)
+        self.assertEqual(self.c.post("/run").status_code, 401)
         bad = {"Authorization": "Basic " + base64.b64encode(b"me:wrong").decode()}
-        self.assertEqual(self.c.get("/", headers=bad).status_code, 401)
+        self.assertEqual(self.c.get("/admin", headers=bad).status_code, 401)
+        for public in ["/", "/archive"]:
+            self.assertEqual(self.c.get(public).status_code, 200, public)
         self.assertEqual(self.c.get("/healthz").status_code, 200)
 
     def test_empty_then_run_now_saves_history(self):
-        self.assertIn("No briefings yet", self.c.get("/", headers=self.auth).get_data(as_text=True))
+        self.assertIn("No briefings yet", self.c.get("/admin", headers=self.auth).get_data(as_text=True))
         with mock.patch.object(web, "run_once", return_value=dict(FAKE)) as ro:
             r = self.c.post("/run", headers=self.auth, data={})
             self.assertEqual(r.status_code, 303)
@@ -37,13 +40,42 @@ class WebTest(unittest.TestCase):
                     break
                 time.sleep(0.05)
         ro.assert_called_once_with(push=False)
-        page = self.c.get("/", headers=self.auth).get_data(as_text=True)
+        page = self.c.get("/admin", headers=self.auth).get_data(as_text=True)
         self.assertIn("Payrolls rose 29,000", page)
         self.assertIn("1 unverified link", page)
         self.assertIn("https://made.up/x", page)
         run_id = web.list_runs()[0]["id"]
-        self.assertEqual(self.c.get(f"/b/{run_id}", headers=self.auth).status_code, 200)
-        self.assertEqual(self.c.get("/b/../etc", headers=self.auth).status_code, 404)
+        self.assertEqual(self.c.get(f"/admin/b/{run_id}", headers=self.auth).status_code, 200)
+        self.assertEqual(self.c.get("/admin/b/../etc", headers=self.auth).status_code, 404)
+
+    def test_public_site_hides_flagged_issues(self):
+        clean = dict(FAKE, flagged_links=[], briefing=(
+            "## 1. Core Policy & Economy\n- U.S. payrolls rose 29,000 in September. The jobless rate hit 4.2%. "
+            "([CNBC Economy](https://cnbc.com/x))\n"
+            "## 4. The Noise Filter\n- Left out: A viral clip — it changed no votes."))
+        flagged_id = web.save_run(dict(FAKE), "schedule")
+        time.sleep(1.1)
+        clean_id = web.save_run(clean, "schedule")
+        home = self.c.get("/").get_data(as_text=True)
+        self.assertIn("<strong>U.S. payrolls rose 29,000 in September.</strong>", home)
+        self.assertIn("Left out today", home)
+        self.assertIn("A viral clip", home)
+        self.assertEqual(self.c.get(f"/issue/{clean_id}").status_code, 200)
+        self.assertEqual(self.c.get(f"/issue/{flagged_id}").status_code, 404)
+        self.assertNotIn(flagged_id, self.c.get("/archive").get_data(as_text=True))
+
+    def test_subscribe(self):
+        with mock.patch.object(web, "subscribe_to_beehiiv") as sub:
+            r = self.c.post("/subscribe", data={"email": "Reader@Example.com"})
+            self.assertIn("s=ok", r.headers["Location"])
+            sub.assert_called_once_with("reader@example.com")
+            r = self.c.post("/subscribe", data={"email": "not-an-email"})
+            self.assertIn("s=err", r.headers["Location"])
+            self.c.post("/subscribe", data={"email": "bot@example.com", "website": "spam.biz"})
+            self.assertEqual(sub.call_count, 1)  # honeypot: silently ignored
+        with mock.patch.object(web, "subscribe_to_beehiiv", side_effect=RuntimeError("Try later")):
+            r = self.c.post("/subscribe", data={"email": "x@example.com"})
+        self.assertIn("s=err", r.headers["Location"])
 
     def test_runs_never_overlap(self):
         started = []

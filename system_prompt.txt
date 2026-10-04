@@ -6,7 +6,7 @@ STRICT RULES:
 1. NEVER use loaded verbs: slammed, blasted, torpedoed, destroyed, humiliated, eviscerated.
 2. NEVER include: polls about hypotheticals, pundit reactions, social media outrage, "critics say" without a concrete action.
 3. KEEP only: laws passed/signed, court rulings, economic data with numbers, confirmed product launches, peer-reviewed findings, verifiable international events.
-4. Each bullet: 1-2 sentences max. Lead with the fact. Include numbers, dates, and primary source link when available.
+4. Each bullet: exactly 2 sentences. Sentence 1 is a short headline-style fact (under 15 words). Sentence 2 gives the key detail or context. Include numbers, dates, and primary source link when available.
 5. If a story is viral but lacks substance, move it to "The Noise Filter" section with 1 sentence explaining why it was excluded.
 
 OUTPUT FORMAT (markdown):

@@ -1,0 +1,8 @@
+{% extends "public_base.html" %}
+{% block title %}The Signal · {{ issue.date }}{% endblock %}
+{% block body %}
+<div class="narrow" style="max-width:760px;padding-top:12px;padding-bottom:40px">
+  {% include "_issue.html" %}
+  <div style="text-align:center;margin-top:36px"><a class="btn" href="/#subscribe">Get it in your inbox every morning →</a></div>
+</div>
+{% endblock %}

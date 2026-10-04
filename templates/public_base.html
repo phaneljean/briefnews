@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{% block title %}The Signal · All signal, zero noise{% endblock %}</title>
+<meta name="description" content="A 3-minute daily news briefing: facts and outcomes only, no political theater.">
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Source+Serif+4:ital,opsz,wght@0,8..60,400;0,8..60,600;0,8..60,700;1,8..60,400&display=swap" rel="stylesheet">
+<style>
+:root{--ink:#0a0a0a;--body:#3f3f3f;--muted:#737373;--faint:#a3a3a3;--line:#e5e5e5;--soft:#fafafa;--paper:#fff;
+  --serif:"Source Serif 4",Georgia,"Times New Roman",serif;--sans:Inter,ui-sans-serif,system-ui,sans-serif;color-scheme:light}
+*{box-sizing:border-box}html,body{margin:0}body{background:var(--paper);color:var(--ink);font:16px/1.6 var(--sans);-webkit-font-smoothing:antialiased}
+a{color:inherit}.wrap{max-width:1080px;margin:0 auto;padding:0 20px}.narrow{max-width:760px;margin:0 auto;padding:0 20px}
+.topbar{position:sticky;top:0;z-index:20;background:rgba(255,255,255,.95);backdrop-filter:blur(8px);border-bottom:1px solid var(--line)}
+.topbar .wrap{display:flex;align-items:center;justify-content:space-between;gap:16px;height:60px}
+.logo{font:700 22px/1 var(--serif);letter-spacing:-.01em;text-decoration:none}
+.nav{display:flex;gap:22px;font-size:14px;font-weight:500;color:var(--muted)}.nav a{text-decoration:none}.nav a:hover{color:var(--ink)}
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;height:48px;padding:0 24px;border-radius:8px;border:0;background:var(--ink);color:#fff;font:600 15px var(--sans);cursor:pointer;text-decoration:none}
+.btn:hover{background:#262626}.btn-sm{height:36px;padding:0 16px;font-size:13px;border-radius:999px}
+.eyebrow{font:600 11px var(--sans);letter-spacing:.25em;text-transform:uppercase;color:var(--muted)}
+footer{border-top:1px solid var(--line);margin-top:24px}footer .wrap{display:flex;flex-wrap:wrap;gap:16px;justify-content:space-between;align-items:center;padding-top:36px;padding-bottom:36px}
+footer p{margin:0;font-size:12px;color:var(--faint);max-width:520px;line-height:1.5}
+/* ---- the issue, newspaper style ---- */
+.paper{background:#fff}
+.masthead{text-align:center;border-bottom:4px double var(--ink);padding:28px 0 18px}
+.masthead .name{font:700 44px/1 var(--serif);letter-spacing:-.02em}@media(min-width:640px){.masthead .name{font-size:56px}}
+.masthead .meta{margin-top:10px;font:600 11px var(--sans);letter-spacing:.22em;text-transform:uppercase;color:var(--muted)}
+.section{margin-top:36px}
+.section h2{display:flex;align-items:baseline;gap:12px;margin:0;padding-bottom:8px;border-bottom:2px solid var(--ink)}
+.section h2 .n{font:700 14px var(--serif);letter-spacing:.1em;color:var(--faint)}
+.section h2 .t{font:700 24px/1.2 var(--serif)}
+.section ol{list-style:none;margin:16px 0 0;padding:0;counter-reset:story}
+.section li{display:flex;gap:12px;margin:0 0 16px;line-height:1.65;color:var(--body);counter-increment:story}
+.section li::before{content:counter(story) ".";font:700 18px/1.5 var(--serif);color:var(--ink);flex:none}
+.section li strong{color:var(--ink);font-weight:600}
+.section li a{color:var(--muted);font-size:.85em;text-decoration:underline;text-underline-offset:2px;white-space:nowrap}
+.noise{margin-top:16px;border:1px dashed #a3a3a3;border-radius:8px;background:var(--soft);padding:18px 20px}
+.noise .eyebrow{letter-spacing:.2em}
+.noise p{margin:8px 0 0;font:italic 17px/1.6 var(--serif);color:#262626}
+.noise p a{font-style:normal;font-size:.8em;color:var(--muted)}
+.colophon{margin-top:40px;padding-top:18px;border-top:1px solid var(--line);text-align:center;font-size:12px;line-height:1.6;color:var(--faint)}
+</style>
+</head>
+<body>
+<header class="topbar"><div class="wrap">
+  <a class="logo" href="/">THE SIGNAL</a>
+  <nav class="nav"><a href="/#today">Today</a><a href="/archive">Archive</a><a class="btn btn-sm" href="/#subscribe">Subscribe</a></nav>
+</div></header>
+{% block body %}{% endblock %}
+<footer><div class="wrap">
+  <a class="logo" href="/" style="font-size:18px">THE SIGNAL</a>
+  <p>Drafted each morning with AI from public reporting by BBC, The Guardian, DW, NPR, PBS NewsHour, CNBC, Ars Technica and ScienceDaily. Every story links to its source.</p>
+  <nav class="nav" style="font-size:13px"><a href="/archive">Archive</a><a href="/#subscribe">Subscribe</a></nav>
+</div></footer>
+</body>
+</html>

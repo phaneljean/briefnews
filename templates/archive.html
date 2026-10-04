@@ -1,0 +1,15 @@
+{% extends "public_base.html" %}
+{% block title %}The Signal · Archive{% endblock %}
+{% block body %}
+<div class="narrow" style="padding-top:48px;padding-bottom:48px">
+  <div class="eyebrow">Every issue</div>
+  <h1 style="font:700 44px/1.1 var(--serif);margin:8px 0 28px">Archive</h1>
+  {% for r in runs %}
+    <a href="/issue/{{ r.id }}" style="display:flex;justify-content:space-between;gap:12px;padding:16px 0;border-top:1px solid var(--line);text-decoration:none">
+      <span style="font:600 19px var(--serif)">The Signal — {{ r.date }}</span><span style="color:var(--muted)">Read →</span>
+    </a>
+  {% else %}
+    <p style="color:var(--muted)">No issues yet. The first one arrives tomorrow morning.</p>
+  {% endfor %}
+</div>
+{% endblock %}
