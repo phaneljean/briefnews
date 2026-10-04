@@ -104,8 +104,6 @@ def pick_models():
 
 
 def filter_with_gemini(items):
-    if not items:
-        return "No items fetched today."
     if _genai_client is None:
         raise RuntimeError(f"Gemini client not initialized - GOOGLE_API_KEY present={bool(GOOGLE_KEY)}")
 
@@ -127,7 +125,7 @@ def filter_with_gemini(items):
                 config=types.GenerateContentConfig(system_instruction=SYSTEM_PROMPT, temperature=0.1))
             if resp.text:
                 print(f"Success with {model}")
-                return resp.text
+                return resp.text, model
             last_error = f"{model} returned no text"
         except Exception as e:
             print(f"Model {model} failed: {e}")
@@ -181,27 +179,30 @@ def draft_to_beehiiv(markdown_body):
     return body.get("data", body)
 
 
-def run_once():
-    """Fetch, filter, save and draft. Returns the briefing markdown."""
+def run_once(push=True):
+    """Fetch, filter and (optionally) draft to Beehiiv.
+
+    Returns {"briefing", "model", "items", "sources", "flagged_links", "beehiiv"}.
+    Saving is the caller's job (see web.py), so history lives in one place.
+    """
     items = dedupe(fetch_rss())
-    print(f"Fetched {len(items)} items from {len({i['source'] for i in items})} sources")
+    sources = sorted({i["source"] for i in items})
+    print(f"Fetched {len(items)} items from {len(sources)} sources")
     if not items:
         raise RuntimeError("No items fetched from any feed")
-    briefing = filter_with_gemini(items)
+    briefing, model = filter_with_gemini(items)
     bad = unknown_links(briefing, items)
     if bad:
         print(f"WARNING: briefing has {len(bad)} link(s) not in today's feeds: {bad[:5]}")
-        briefing += ("\n\n<!-- REVIEW: these links weren't in today's source feeds: "
-                     + ", ".join(bad) + " -->")
     briefing = label_links(briefing, items)
-    out_path = "/app/data/latest_briefing.md" if os.path.isdir("/app/data") else "latest_briefing.md"
-    with open(out_path, "w") as f:
-        f.write(briefing)
-    print(f"Saved to {out_path}")
-    res = draft_to_beehiiv(briefing)
-    print("Beehiiv:", res.get("id"))
-    return briefing
+    beehiiv = None
+    if push:
+        res = draft_to_beehiiv(briefing)
+        beehiiv = res.get("id")
+        print("Beehiiv:", beehiiv)
+    return {"briefing": briefing, "model": model, "items": len(items), "sources": sources,
+            "flagged_links": bad, "beehiiv": beehiiv}
 
 
 if __name__ == "__main__":
-    print(run_once()[:1500])
+    print(run_once(push=os.environ.get("PUBLISH_TO_BEEHIIV", "1") != "0")["briefing"][:1500])

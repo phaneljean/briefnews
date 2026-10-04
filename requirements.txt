@@ -3,3 +3,5 @@ google-genai>=1.0.0
 requests
 pytz
 markdown
+flask
+gunicorn

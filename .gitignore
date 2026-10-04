@@ -7,3 +7,4 @@ __pycache__/
 venv/
 
 latest_briefing.md
+data/
