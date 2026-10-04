@@ -1,8 +1,15 @@
 {% extends "public_base.html" %}
 {% block title %}The Signal · {{ issue.date }}{% endblock %}
 {% block body %}
-<div class="narrow" style="max-width:760px;padding-top:12px;padding-bottom:40px">
-  {% include "_issue.html" %}
-  <div style="text-align:center;margin-top:36px"><a class="btn" href="/#subscribe">Get it in your inbox every morning →</a></div>
+<section class="brief"><div class="wrap">
+  <div class="eyebrow">Daily Briefing{% if issue.number %} · Issue No. {{ issue.number }}{% endif %}</div>
+  <h1 style="font-size:40px">{{ issue.date }}</h1>
+  <div class="brief-stats">
+    <span><b>{{ issue.stories }}</b> stor{{ "y" if issue.stories == 1 else "ies" }}</span><span>•</span><span><b>{{ issue.articles }}</b> article{{ "" if issue.articles == 1 else "s" }}</span><span>•</span><span><b>{{ issue.minutes }}</b> min read</span>
+  </div>
+</div></section>
+<div class="wrap">
+  {% include "_stories.html" %}
+  <div style="text-align:center;margin:40px 0 24px"><a class="btn" href="/#subscribe">Get it in your inbox every morning →</a></div>
 </div>
 {% endblock %}

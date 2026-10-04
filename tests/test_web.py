@@ -58,7 +58,7 @@ class WebTest(unittest.TestCase):
         clean_id = web.save_run(clean, "schedule")
         home = self.c.get("/").get_data(as_text=True)
         self.assertIn("<strong>U.S. payrolls rose 29,000 in September.</strong>", home)
-        self.assertIn("Left out today", home)
+        self.assertIn("left out today", home)
         self.assertIn("A viral clip", home)
         self.assertEqual(self.c.get(f"/issue/{clean_id}").status_code, 200)
         self.assertEqual(self.c.get(f"/issue/{flagged_id}").status_code, 404)

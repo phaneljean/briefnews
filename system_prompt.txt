@@ -23,6 +23,6 @@ OUTPUT FORMAT (markdown):
 - Left out: [viral story] — [1 sentence why it lacked substance].
 
 TONE: Neutral, dry, wire-service. No adjectives of praise or condemnation. No speculation, no punditry. Facts only.
-SOURCES: End every bullet with the exact LINK of the item it came from. Never invent or change a link.
+SOURCES: End every bullet with the exact LINK of every input item that reports the same event, each in parentheses. Prefer stories reported by several outlets. Never invent or change a link.
 
 FORMAT: Plain text only. No LaTeX, math notation or emoji.

@@ -13,7 +13,7 @@ import pytz
 import requests
 from flask import Flask, Response, abort, redirect, render_template, request, url_for
 
-from ingest import run_once
+from ingest import SOURCE_COUNTRY, label_links, run_once
 
 PACIFIC = pytz.timezone("America/Los_Angeles")
 RUN_AT = os.getenv("RUN_AT", "04:30")  # HH:MM Pacific
@@ -188,9 +188,33 @@ def _bold_lead(bullet):
     return f"**{bullet[:m.end()].strip()}** {rest}"
 
 
+_LINKED_SOURCE = re.compile(r"\(\[([^\]]+)\]\((https?://[^)\s]+)\)\)")
+COUNTRY_ORDER = ["US", "UK", "Germany", "France", "Qatar"]
+
+
+def _story(line, noise):
+    """One bullet -> {html, sources, countries, ...} for a story card."""
+    sources, seen = [], set()
+    for label, url in _LINKED_SOURCE.findall(line):
+        if label not in seen:
+            seen.add(label)
+            sources.append({"name": label, "url": url, "country": SOURCE_COUNTRY.get(label, "Other")})
+    text = _LINKED_SOURCE.sub("", line).strip().rstrip(".") + "."
+    text = re.sub(r"\s+([.,;])", r"\1", text)
+    counts = {}
+    for src in sources:
+        counts[src["country"]] = counts.get(src["country"], 0) + 1
+    countries = [{"name": c, "n": counts[c], "pct": round(100 * counts[c] / len(sources))}
+                 for c in COUNTRY_ORDER + sorted(set(counts) - set(COUNTRY_ORDER)) if c in counts]
+    return {"html": md.markdown(text if noise else _bold_lead(text))[3:-4], "sources": sources,
+            "countries": countries,
+            # Blindspot: several outlets covered it, but all from one country.
+            "blindspot": countries[0]["name"] if len(sources) >= 2 and len(countries) == 1 else None}
+
+
 def issue_view(run):
-    """Split a briefing into numbered sections for the front-page layout."""
-    text = run["briefing"]
+    """Split a briefing into sections of story cards with coverage data."""
+    text = label_links(run["briefing"])  # also attributes older issues saved with bare links
     sections = []
     for chunk in re.split(r"^##\s+", text, flags=re.M)[1:]:
         title, _, body = chunk.partition("\n")
@@ -198,16 +222,20 @@ def issue_view(run):
         num, name = (m.group(1), m.group(2)) if m else (str(len(sections) + 1), title.strip())
         lines = [re.sub(r"^\s*[-*]\s+", "", ln) for ln in body.splitlines() if re.match(r"^\s*[-*]\s+", ln)]
         noise = "noise" in name.lower()
-        items = [md.markdown(ln if noise else _bold_lead(ln))[3:-4] for ln in lines]  # strip <p></p>
-        sections.append({"n": num.zfill(2), "title": name, "items": items, "noise": noise})
+        sections.append({"n": num.zfill(2), "title": name, "noise": noise,
+                         "slug": re.sub(r"[^a-z]+", "-", name.lower()).strip("-"),
+                         "stories": [_story(ln, noise) for ln in lines]})
+    stories = [st for sec in sections if not sec["noise"] for st in sec["stories"]]
     words = len(re.sub(r"https?://\S+|\[|\]|\(|\)", " ", text).split())
-    stories = sum(len(s["items"]) for s in sections if not s["noise"])
     all_runs = sorted(r["id"] for r in list_runs(10000))
     created = datetime.fromisoformat(run["created"])
-    return {"id": run["id"], "sections": sections, "stories": stories,
+    return {"id": run["id"], "sections": sections, "stories": len(stories),
+            "articles": sum(len(st["sources"]) for st in stories),
+            "multi": sum(1 for st in stories if len(st["sources"]) >= 2),
+            "blindspots": [st for st in stories if st["blindspot"]],
             "minutes": max(1, math.ceil(words / 230)), "sources": run.get("sources", []),
             "number": all_runs.index(run["id"]) + 1 if run["id"] in all_runs else None,
-            "date": created.strftime("%A, %B %-d, %Y")}
+            "date": created.strftime("%A, %B %-d, %Y"), "short_date": created.strftime("%b %-d")}
 
 
 def subscribe_to_beehiiv(email):
@@ -231,7 +259,16 @@ def home():
     runs = public_runs(1)
     view = issue_view(load_run(runs[0]["id"])) if runs else None
     return render_template("home.html", issue=view, status=request.args.get("s"),
-                           message=request.args.get("m"))
+                           message=request.args.get("m"), **_coverage_legend())
+
+
+def _coverage_legend():
+    by_country = {}
+    for label, country in SOURCE_COUNTRY.items():
+        by_country.setdefault(country, []).append(label)
+    order = [c for c in COUNTRY_ORDER if c in by_country] + sorted(set(by_country) - set(COUNTRY_ORDER))
+    return {"countries": [{"name": c, "outlets": by_country[c]} for c in order],
+            "source_total": len(SOURCE_COUNTRY), "country_total": len(by_country)}
 
 
 @app.get("/issue/<run_id>")

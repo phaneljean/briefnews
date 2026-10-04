@@ -7,18 +7,21 @@ from datetime import datetime, timezone
 
 import markdown as md
 
-# (feed URL, label shown to the model, section it mostly feeds)
+# (feed URL, label shown to the model, section it mostly feeds, home country)
 # Reuters and AP shut down their public RSS feeds, so they're not here.
 RSS_SOURCES = [
-    ("https://feeds.bbci.co.uk/news/world/rss.xml", "BBC World", "global"),
-    ("https://www.theguardian.com/world/rss", "The Guardian World", "global"),
-    ("https://rss.dw.com/rdf/rss-en-all", "DW", "global"),
-    ("https://feeds.npr.org/1001/rss.xml", "NPR News", "policy"),
-    ("https://www.pbs.org/newshour/feeds/rss/headlines", "PBS NewsHour", "policy"),
-    ("https://www.cnbc.com/id/20910258/device/rss/rss.html", "CNBC Economy", "policy"),
-    ("https://feeds.arstechnica.com/arstechnica/index", "Ars Technica", "tech"),
-    ("https://www.sciencedaily.com/rss/top/science.xml", "ScienceDaily", "tech"),
+    ("https://feeds.bbci.co.uk/news/world/rss.xml", "BBC World", "global", "UK"),
+    ("https://www.theguardian.com/world/rss", "The Guardian World", "global", "UK"),
+    ("https://rss.dw.com/rdf/rss-en-all", "DW", "global", "Germany"),
+    ("https://www.france24.com/en/rss", "France 24", "global", "France"),
+    ("https://www.aljazeera.com/xml/rss/all.xml", "Al Jazeera", "global", "Qatar"),
+    ("https://feeds.npr.org/1001/rss.xml", "NPR News", "policy", "US"),
+    ("https://www.pbs.org/newshour/feeds/rss/headlines", "PBS NewsHour", "policy", "US"),
+    ("https://www.cnbc.com/id/20910258/device/rss/rss.html", "CNBC Economy", "policy", "US"),
+    ("https://feeds.arstechnica.com/arstechnica/index", "Ars Technica", "tech", "US"),
+    ("https://www.sciencedaily.com/rss/top/science.xml", "ScienceDaily", "tech", "US"),
 ]
+SOURCE_COUNTRY = {label: country for _, label, _, country in RSS_SOURCES}
 PER_FEED = 8      # keep the mix balanced across sections
 MAX_ITEMS = PER_FEED * len(RSS_SOURCES)  # every feed gets in
 
@@ -46,7 +49,7 @@ BEEHIIV_PUBLICATION_ID = os.environ.get("BEEHIIV_PUBLICATION_ID", "")
 
 def fetch_rss():
     items = []
-    for url, label, section in RSS_SOURCES:
+    for url, label, section, _country in RSS_SOURCES:
         try:
             feed = feedparser.parse(url, agent="TheSignalBot/1.0 (+https://github.com/phaneljean/briefnews)")
             entries = feed.entries[:PER_FEED]
@@ -110,8 +113,8 @@ def filter_with_gemini(items):
     raw = "\n\n".join(f"SOURCE: {i['source']}\nTITLE: {i['title']}\nSUMMARY: {i['summary']}\nLINK: {i['link']}"
                       for i in items[:MAX_ITEMS])
     prompt = ("Filter these raw news items into the 4-section briefing format. Return markdown. "
-              "Every bullet must end with the LINK of the item it comes from, copied exactly; "
-              "never invent or alter a link.\n\n" + raw)
+              "Every bullet must end with the LINK of EVERY item below that reports the same event "
+              "(one or more), each in its own parentheses, copied exactly; never invent or alter a link.\n\n" + raw)
 
     models = pick_models()
     if not models:
@@ -154,18 +157,36 @@ def unknown_links(briefing, items):
     return [u for u in found if u.rstrip(".,;") not in known]
 
 
-def label_links(briefing, items):
-    """Turn each bare source URL into a short linked source name, e.g. (CNBC Economy)."""
-    by_link = {i["link"]: i["source"] for i in items if i["link"]}
+# Domain -> source label, so a link can be attributed even if the model formats it oddly.
+SOURCE_DOMAINS = {
+    "bbc.co.uk": "BBC World", "bbc.com": "BBC World", "theguardian.com": "The Guardian World",
+    "dw.com": "DW", "france24.com": "France 24", "aljazeera.com": "Al Jazeera",
+    "npr.org": "NPR News", "pbs.org": "PBS NewsHour", "cnbc.com": "CNBC Economy",
+    "arstechnica.com": "Ars Technica", "sciencedaily.com": "ScienceDaily",
+}
+_URL = re.compile(r"(\]\()?\(?(https?://[^\s)\]>\"']+)\)?")
+
+
+def source_for(url, by_link=None):
+    if by_link and url in by_link:
+        return by_link[url]
+    host = re.sub(r"^https?://(www\.)?", "", url).split("/")[0]
+    return next((name for domain, name in SOURCE_DOMAINS.items() if host == domain or host.endswith("." + domain)), None)
+
+
+def label_links(briefing, items=()):
+    """Turn each source URL, bare or in parentheses, into a short linked name: ([CNBC Economy](url))."""
+    by_link = {i["link"]: i["source"] for i in items if i.get("link")}
 
     def swap(m):
-        url = m.group(0).rstrip(".,;")
-        tail = m.group(0)[len(url):]
-        name = by_link.get(url)
+        if m.group(1):  # already a markdown link target "](url)": leave it alone
+            return m.group(0)
+        url = m.group(2).rstrip(".,;")
+        tail = m.group(2)[len(url):]
+        name = source_for(url, by_link)
         return f"([{name}]({url})){tail}" if name else m.group(0)
 
-    # Bare URLs only, not ones already inside markdown link syntax "(url)".
-    return re.sub(r"(?<!\()https?://[^\s)\]>\"']+", swap, briefing)
+    return _URL.sub(swap, briefing)
 
 
 def draft_to_beehiiv(markdown_body):

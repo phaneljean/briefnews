@@ -1,0 +1,48 @@
+{# Story cards with coverage, Ground News style. Expects `issue`. #}
+{% macro coverage(st) -%}
+<div class="cov">
+  <div class="cov-top">
+    <span class="cov-n">{{ st.sources|length }} source{{ "" if st.sources|length == 1 else "s" }}</span>
+    <span class="cov-legend">{% for c in st.countries %}<span><i class="dot c-{{ c.name|lower }}"></i>{{ c.name }} {{ c.n }}</span>{% endfor %}</span>
+  </div>
+  <div class="bar" role="img" aria-label="Coverage by country: {% for c in st.countries %}{{ c.name }} {{ c.n }}{{ ', ' if not loop.last }}{% endfor %}">
+    {% for c in st.countries %}<i class="c-{{ c.name|lower }}" style="width:{{ c.pct }}%"></i>{% endfor %}
+  </div>
+  <div class="srcs">{% for s in st.sources %}<a href="{{ s.url }}" rel="noopener" target="_blank">{{ s.name }}</a>{% endfor %}</div>
+</div>
+{%- endmacro %}
+
+{% for sec in issue.sections if not sec.noise %}
+<section class="sec" id="{{ sec.slug }}">
+  <div class="sec-head">
+    <h2><span class="n">{{ sec.n }}</span>{{ sec.title }}</h2>
+    <span class="eyebrow">{{ sec.stories|length }} stor{{ "y" if sec.stories|length == 1 else "ies" }}</span>
+  </div>
+  <div class="cards">
+    {% for st in sec.stories %}
+    <article class="card{{ ' feature' if loop.first and loop.length > 2 }}">
+      <p class="story">{{ st.html|safe }}</p>
+      {% if st.blindspot %}<div class="bs-tag">Blindspot · only {{ st.blindspot }} outlets</div>{% endif %}
+      {% if st.sources %}{{ coverage(st) }}{% endif %}
+    </article>
+    {% endfor %}
+  </div>
+</section>
+{% endfor %}
+
+{% if issue.blindspots %}
+<section class="blindspot">
+  <div class="eyebrow" style="color:#a3a3a3">Blindspot</div>
+  <h2>Covered by several outlets, but all from one country</h2>
+  <ul>{% for st in issue.blindspots %}<li>{{ st.html|striptags }} <span>Only {{ st.blindspot }} outlets · {{ st.sources|length }} sources</span></li>{% endfor %}</ul>
+</section>
+{% endif %}
+
+{% for sec in issue.sections if sec.noise %}
+<section class="noise">
+  <div class="eyebrow">{{ sec.n }} · {{ sec.title }}: left out today</div>
+  {% for st in sec.stories %}<p>{{ st.html|replace("Left out: ", "")|safe }}</p>
+    {% if st.sources %}<div class="srcs" style="margin-top:6px">{% for s in st.sources %}<a href="{{ s.url }}" rel="noopener" target="_blank">{{ s.name }}</a>{% endfor %}</div>{% endif %}
+  {% endfor %}
+</section>
+{% endfor %}
