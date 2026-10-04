@@ -1,16 +1,26 @@
 """
 Anti-Spectacle Daily Newsletter - Ingestion Engine
-NEW SDK ONLY: google-genai (Client API)
-No genai.configure() - that method does not exist in new SDK
+RSS -> dedupe -> Gemini filter -> Beehiiv draft. Uses the google-genai SDK.
 """
 import feedparser, os, re, requests
 from datetime import datetime, timezone
 
+import markdown as md
+
+# (feed URL, label shown to the model, section it mostly feeds)
+# Reuters and AP shut down their public RSS feeds, so they're not here.
 RSS_SOURCES = [
-    "https://www.reuters.com/rssFeed/worldNews",
-    "https://feeds.bbci.co.uk/news/world/rss.xml",
-    "https://feeds.apnews.com/apf-topnews",
+    ("https://feeds.bbci.co.uk/news/world/rss.xml", "BBC World", "global"),
+    ("https://www.theguardian.com/world/rss", "The Guardian World", "global"),
+    ("https://rss.dw.com/rdf/rss-en-all", "DW", "global"),
+    ("https://feeds.npr.org/1001/rss.xml", "NPR News", "policy"),
+    ("https://www.pbs.org/newshour/feeds/rss/headlines", "PBS NewsHour", "policy"),
+    ("https://www.cnbc.com/id/20910258/device/rss/rss.html", "CNBC Economy", "policy"),
+    ("https://feeds.arstechnica.com/arstechnica/index", "Ars Technica", "tech"),
+    ("https://www.sciencedaily.com/rss/top/science.xml", "ScienceDaily", "tech"),
 ]
+PER_FEED = 8      # keep the mix balanced across sections
+MAX_ITEMS = PER_FEED * len(RSS_SOURCES)  # every feed gets in
 
 SYSTEM_PROMPT = open(os.path.join(os.path.dirname(__file__), "system_prompt.txt")).read()
 
@@ -18,165 +28,165 @@ SYSTEM_PROMPT = open(os.path.join(os.path.dirname(__file__), "system_prompt.txt"
 GOOGLE_KEY = (os.environ.get("GOOGLE_API_KEY") or os.environ.get("GEMINI_API_KEY") or "").strip()
 if GOOGLE_KEY:
     os.environ["GOOGLE_API_KEY"] = GOOGLE_KEY
-    print(f"GOOGLE_API_KEY present: True (length {len(GOOGLE_KEY)})")
 else:
     print("WARNING: No GOOGLE_API_KEY set")
 
-# --- NEW SDK ONLY - forced to v1 API (v1beta retired many models) ---
 _genai_client = None
-# Live v1 models as of Sept 2026 - 2.5-flash is deprecated for new keys per Google error
-# Primary: 1.5-flash is most stable and always available, then 2.0 family
-_MODEL_CANDIDATES = [
-    "gemini-1.5-flash",
-    "gemini-1.5-flash-8b",
-    "gemini-1.5-pro",
-    "gemini-2.0-flash",
-    "gemini-2.0-flash-lite",
-    "gemini-flash-latest",
-    "gemini-pro-latest"
-]
-
 try:
     from google import genai
     from google.genai import types
     if GOOGLE_KEY:
-        # Force v1 API - v1beta returns 404 for gemini-pro and others
-        _genai_client = genai.Client(
-            api_key=GOOGLE_KEY,
-            http_options={"api_version": "v1"}
-        )
-        print(f"Using google-genai new SDK (v1 API) with {_MODEL_CANDIDATES[0]}")
-    else:
-        print("No key for new SDK")
+        _genai_client = genai.Client(api_key=GOOGLE_KEY)
 except Exception as e:
     print(f"Failed to init google-genai client: {e}")
-    try:
-        # Fallback without http_options for older versions of the library
-        from google import genai as genai_fallback
-        _genai_client = genai_fallback.Client(api_key=GOOGLE_KEY) if GOOGLE_KEY else None
-        print(f"Fallback client init: {bool(_genai_client)}")
-    except Exception as e2:
-        print(f"Fallback also failed: {e2}")
-        _genai_client = None
 
 BEEHIIV_API_KEY = os.environ.get("BEEHIIV_API_KEY", "")
 BEEHIIV_PUBLICATION_ID = os.environ.get("BEEHIIV_PUBLICATION_ID", "")
 
+
 def fetch_rss():
     items = []
-    for url in RSS_SOURCES:
+    for url, label, section in RSS_SOURCES:
         try:
-            feed = feedparser.parse(url)
-            for e in feed.entries[:20]:
-                title = e.get("title","")
-                summary = re.sub(r'<[^>]+>', '', e.get("summary",""))
-                link = e.get("link","")
-                items.append({"title": title, "summary": summary[:800], "link": link, "source": url})
+            feed = feedparser.parse(url, agent="TheSignalBot/1.0 (+https://github.com/phaneljean/briefnews)")
+            entries = feed.entries[:PER_FEED]
+            if not entries:
+                print(f"RSS empty for {label} ({url}) status={feed.get('status')}")
+            for e in entries:
+                summary = re.sub(r"<[^>]+>", "", e.get("summary", ""))
+                items.append({"title": e.get("title", ""), "summary": summary[:800],
+                              "link": e.get("link", ""), "source": label, "section": section})
         except Exception as ex:
-            print(f"RSS fetch failed for {url}: {ex}")
+            print(f"RSS fetch failed for {label}: {ex}")
     return items
+
 
 def dedupe(items):
     seen, out = set(), []
     for it in items:
-        key = re.sub(r'\W+', '', it["title"].lower())[:40]
-        if key not in seen:
+        key = re.sub(r"\W+", "", it["title"].lower())[:40]
+        if key and key not in seen:
             seen.add(key); out.append(it)
     return out
+
+
+def _version(name):
+    """'models/gemini-2.5-flash' -> (2, 5); unversioned names sort last."""
+    m = re.search(r"gemini-(\d+)(?:\.(\d+))?", name)
+    return (int(m.group(1)), int(m.group(2) or 0)) if m else (0, 0)
+
+
+def pick_models():
+    """Models to try, best first. GEMINI_MODEL wins; otherwise ask the API
+    which text models this key can use, so retired models never break a run."""
+    override = os.environ.get("GEMINI_MODEL", "").strip()
+    usable = []
+    try:
+        for m in _genai_client.models.list():
+            name = m.name.split("/")[-1]
+            actions = getattr(m, "supported_actions", None) or []
+            if actions and "generateContent" not in actions:
+                continue
+            if not name.startswith("gemini-") or re.search(r"image|tts|audio|live|embedding|vision", name):
+                continue
+            usable.append(name)
+    except Exception as e:
+        print(f"Could not list models: {e}")
+
+    # Prefer stable flash models (fast, cheap), newest first; then flash-lite, then pro.
+    def rank(name):
+        tier = 0 if re.search(r"flash(?!-lite)", name) else 1 if "flash-lite" in name else 2
+        unstable = "preview" in name or "exp" in name
+        return (tier, unstable, tuple(-v for v in _version(name)))
+
+    ordered = sorted(set(usable), key=rank)
+    return ([override] if override else []) + [m for m in ordered if m != override]
+
 
 def filter_with_gemini(items):
     if not items:
         return "No items fetched today."
-    
     if _genai_client is None:
         raise RuntimeError(f"Gemini client not initialized - GOOGLE_API_KEY present={bool(GOOGLE_KEY)}")
-    
-    raw = "\n\n".join([f"SOURCE: {i['source']}\nTITLE: {i['title']}\nSUMMARY: {i['summary']}\nLINK: {i['link']}" for i in items[:30]])
-    prompt = f"Filter these raw news items into the 4-section briefing format. Return markdown.\n\n{raw}"
-    
-    # Import types for config
-    try:
-        from google.genai import types
-        has_types = True
-    except:
-        has_types = False
-    
+
+    raw = "\n\n".join(f"SOURCE: {i['source']}\nTITLE: {i['title']}\nSUMMARY: {i['summary']}\nLINK: {i['link']}"
+                      for i in items[:MAX_ITEMS])
+    prompt = ("Filter these raw news items into the 4-section briefing format. Return markdown. "
+              "Every bullet must end with the LINK of the item it comes from, copied exactly; "
+              "never invent or alter a link.\n\n" + raw)
+
+    models = pick_models()
+    if not models:
+        raise RuntimeError("No usable Gemini models for this API key (set GEMINI_MODEL to force one)")
+    print(f"Model order: {models[:5]}")
     last_error = None
-    # Also try to list available models for debugging
-    try:
-        print("Listing available models for this API key...")
-        models_list = list(_genai_client.models.list())
-        available = [m.name for m in models_list[:10]]
-        print(f"Available models (first 10): {available}")
-    except Exception as e:
-        print(f"Could not list models: {e}")
-    
-    for model_try in _MODEL_CANDIDATES:
+    for model in models[:5]:
         try:
-            print(f"Trying new client with {model_try} (v1 API)")
-            if has_types:
-                resp = _genai_client.models.generate_content(
-                    model=model_try,
-                    contents=prompt,
-                    config=types.GenerateContentConfig(
-                        system_instruction=SYSTEM_PROMPT,
-                        temperature=0.1
-                    )
-                )
-            else:
-                resp = _genai_client.models.generate_content(
-                    model=model_try,
-                    contents=prompt,
-                    config={"system_instruction": SYSTEM_PROMPT, "temperature": 0.1}
-                )
-            print(f"Success with {model_try}")
-            return resp.text
-        except Exception as e:
-            print(f"Model {model_try} failed: {e}")
-            last_error = e
-            try:
-                print(f"Retrying {model_try} without system_instruction")
-                resp = _genai_client.models.generate_content(
-                    model=model_try,
-                    contents=f"{SYSTEM_PROMPT}\n\n{prompt}"
-                )
-                print(f"Success with {model_try} (fallback prompt)")
+            resp = _genai_client.models.generate_content(
+                model=model, contents=prompt,
+                config=types.GenerateContentConfig(system_instruction=SYSTEM_PROMPT, temperature=0.1))
+            if resp.text:
+                print(f"Success with {model}")
                 return resp.text
-            except Exception as e2:
-                print(f"Fallback also failed for {model_try}: {e2}")
-                last_error = e2
-                continue
-    
-    raise RuntimeError(f"No Gemini model succeeded. Tried {_MODEL_CANDIDATES}. Last error: {last_error}")
+            last_error = f"{model} returned no text"
+        except Exception as e:
+            print(f"Model {model} failed: {e}")
+            last_error = e
+    raise RuntimeError(f"No Gemini model succeeded. Tried {models[:5]}. Last error: {last_error}")
+
+
+def unknown_links(briefing, items):
+    """Links in the briefing that weren't in today's feeds (possible hallucinations)."""
+    known = {i["link"] for i in items}
+    found = re.findall(r"https?://[^\s)\]>\"']+", briefing)
+    return [u for u in found if u.rstrip(".,;") not in known]
+
 
 def draft_to_beehiiv(markdown_body):
     if os.environ.get("PUBLISH_TO_BEEHIIV", "1") == "0":
         print("PUBLISH_TO_BEEHIIV=0 — skipping Beehiiv push, saving locally only")
         return {"id": "local-only"}
-    
     if not BEEHIIV_API_KEY or not BEEHIIV_PUBLICATION_ID:
         print("Missing BEEHIIV_API_KEY or BEEHIIV_PUBLICATION_ID — saving locally only")
         return {"id": "local-only"}
-    
+
+    # Beehiiv's create-post endpoint takes HTML in body_content (or structured blocks).
+    # It's only available on Beehiiv's Max and Enterprise plans.
     url = f"https://api.beehiiv.com/v2/publications/{BEEHIIV_PUBLICATION_ID}/posts"
     headers = {"Authorization": f"Bearer {BEEHIIV_API_KEY}", "Content-Type": "application/json"}
     data = {
         "title": f"The Signal — {datetime.now(timezone.utc).strftime('%B %d, %Y')}",
         "subtitle": "All signal, zero noise. Your 3-minute daily briefing.",
-        "content": markdown_body,
+        "body_content": md.markdown(markdown_body),
         "status": "draft",
     }
     r = requests.post(url, headers=headers, json=data, timeout=30)
-    r.raise_for_status()
-    return r.json()
+    if not r.ok:
+        raise RuntimeError(f"Beehiiv {r.status_code}: {r.text[:300]}")
+    body = r.json()
+    return body.get("data", body)
 
-if __name__ == "__main__":
+
+def run_once():
+    """Fetch, filter, save and draft. Returns the briefing markdown."""
     items = dedupe(fetch_rss())
-    print(f"Fetched {len(items)} items")
+    print(f"Fetched {len(items)} items from {len({i['source'] for i in items})} sources")
+    if not items:
+        raise RuntimeError("No items fetched from any feed")
     briefing = filter_with_gemini(items)
-    print(briefing[:500])
-    out_path = "/app/data/latest_briefing.md" if os.path.exists("/app/data") else "latest_briefing.md"
-    with open(out_path,"w") as f:
+    bad = unknown_links(briefing, items)
+    if bad:
+        print(f"WARNING: briefing has {len(bad)} link(s) not in today's feeds: {bad[:5]}")
+        briefing += ("\n\n<!-- REVIEW: these links weren't in today's source feeds: "
+                     + ", ".join(bad) + " -->")
+    out_path = "/app/data/latest_briefing.md" if os.path.isdir("/app/data") else "latest_briefing.md"
+    with open(out_path, "w") as f:
         f.write(briefing)
     print(f"Saved to {out_path}")
+    res = draft_to_beehiiv(briefing)
+    print("Beehiiv:", res.get("id"))
+    return briefing
 
+
+if __name__ == "__main__":
+    print(run_once()[:1500])

@@ -1,6 +1,5 @@
 feedparser
 google-genai>=1.0.0
 requests
-schedule
 pytz
-
+markdown
