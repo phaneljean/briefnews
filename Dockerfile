@@ -1,6 +1,8 @@
 FROM python:3.11-slim
 
 WORKDIR /app
+# Write print() output to the logs immediately instead of buffering it.
+ENV PYTHONUNBUFFERED=1
 
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
@@ -8,4 +10,3 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY . .
 
 CMD ["python", "worker.py"]
-
