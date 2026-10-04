@@ -142,6 +142,20 @@ def unknown_links(briefing, items):
     return [u for u in found if u.rstrip(".,;") not in known]
 
 
+def label_links(briefing, items):
+    """Turn each bare source URL into a short linked source name, e.g. (CNBC Economy)."""
+    by_link = {i["link"]: i["source"] for i in items if i["link"]}
+
+    def swap(m):
+        url = m.group(0).rstrip(".,;")
+        tail = m.group(0)[len(url):]
+        name = by_link.get(url)
+        return f"([{name}]({url})){tail}" if name else m.group(0)
+
+    # Bare URLs only, not ones already inside markdown link syntax "(url)".
+    return re.sub(r"(?<!\()https?://[^\s)\]>\"']+", swap, briefing)
+
+
 def draft_to_beehiiv(markdown_body):
     if os.environ.get("PUBLISH_TO_BEEHIIV", "1") == "0":
         print("PUBLISH_TO_BEEHIIV=0 — skipping Beehiiv push, saving locally only")
@@ -179,6 +193,7 @@ def run_once():
         print(f"WARNING: briefing has {len(bad)} link(s) not in today's feeds: {bad[:5]}")
         briefing += ("\n\n<!-- REVIEW: these links weren't in today's source feeds: "
                      + ", ".join(bad) + " -->")
+    briefing = label_links(briefing, items)
     out_path = "/app/data/latest_briefing.md" if os.path.isdir("/app/data") else "latest_briefing.md"
     with open(out_path, "w") as f:
         f.write(briefing)
